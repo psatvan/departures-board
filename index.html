@@ -9,8 +9,8 @@
     .wrap { padding:24px; max-width:1200px; margin:0 auto; }
     #updated { font-size:18px; color:#aaa; margin-bottom:14px; }
 
-    .chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
-    .chip { cursor:pointer; user-select:none; padding:8px 14px; border-radius:999px; color:#fff; font-size:18px; font-weight:700; border:none; transition:opacity .15s ease, transform .1s ease, box-shadow .15s ease; box-shadow:none; }
+    .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; }
+    .chip { cursor:pointer; user-select:none; padding:4px 10px; border-radius:999px; color:#fff; font-size:14px; font-weight:600; border:none; transition:opacity .15s ease, transform .1s ease, box-shadow .15s ease; box-shadow:none; }
     .chip.active { box-shadow:0 0 0 2px rgba(255,255,255,.3); transform:translateY(-1px); }
     .chip.inactive { opacity:.35; filter:none; }
     .chip.inactive::after { content:''; }
@@ -38,8 +38,8 @@
     .footer { position:fixed; bottom:10px; left:24px; right:24px; font-size:14px; color:#666; }
     @media (orientation:landscape) { .wrap { padding:28px 32px; } }
 
-    .timeFilter { margin-bottom:14px; font-size:22px; display:flex; align-items:center; gap:12px; }
-    .timeInput { background:#111827; border:1px solid #4b5563; border-radius:8px; padding:6px 10px; font-size:22px; color:#f9fafb; width:90px; text-align:right; }
+    .timeFilter { margin-bottom:8px; font-size:16px; display:flex; align-items:center; gap:8px; }
+    .timeInput { background:#111827; border:1px solid #4b5563; border-radius:6px; padding:4px 6px; font-size:16px; color:#f9fafb; width:70px; text-align:right; }
   </style>
 </head>
 <body>
@@ -197,7 +197,7 @@
       const tbody = document.getElementById('rows');
       const updated = document.getElementById('updated');
       const prevScroll = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
-      tbody.innerHTML = `<tr><td colspan="3">Loading…</td></tr>`;
+      // no visible loading state to avoid flicker
       try {
         const results = await Promise.allSettled(STOPS.map(fetchDeparturesForStop));
         let deps = [];
@@ -215,10 +215,13 @@
           <tr>
             <td class="line"><div class="lineCell">${lineBadge(d)}</div></td>
             <td class="dest">${d.destination}<div class="meta">${d.stop}</div></td>
-            <td class="min">${d.minutes} min ${isLive(d) ? renderLive() : ''}</td>
+            <td class="min">${d.minutes <= 0 ? 'Due' : d.minutes + ' min'} ${isLive(d) ? renderLive() : ''}</td>
           </tr>`).join('') : `<tr><td colspan="3">No matching departures in the next ${WINDOW_MIN} min.</td></tr>`;
 
-        tbody.innerHTML = rowsHtml;
+        // invisible refresh: only swap if changed
+        if (tbody.innerHTML.trim() !== rowsHtml.trim()) {
+          tbody.innerHTML = rowsHtml;
+        }
         // restore scroll so auto-refresh doesn't jump to top on iPad
         window.scrollTo(0, prevScroll);
         updated.textContent = `Updated ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})}`;
