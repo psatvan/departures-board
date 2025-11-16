@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Berlin Departures</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#000; color:#fff; font-family: -apple-system, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    .wrap { padding:24px; max-width:1200px; margin:0 auto; }
+    #updated { font-size:18px; color:#aaa; margin-bottom:14px; }
+
+    .chips { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+    .chip { cursor:pointer; user-select:none; padding:10px 18px; border-radius:24px; color:#fff; font-size:20px; font-weight:800; border:1px solid rgba(255,255,255,.25); transition:all .15s ease; box-shadow: inset 0 0 0 0 rgba(255,255,255,0); }
+    .chip.active { outline:3px solid rgba(255,255,255,.5); box-shadow: 0 0 0 3px rgba(255,255,255,.15); transform: translateY(-1px); }
+    .chip.inactive { opacity:.3; filter: grayscale(35%); }
+    .chip.inactive::after { content:''; display:inline-block; width:0; height:0; border-top:12px solid transparent; border-bottom:12px solid transparent; border-left:12px solid rgba(255,255,255,.6); margin-left:8px; transform: skewX(-20deg); }
+
+    table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:26px; }
+    th, td { padding:14px 10px; }
+    th { text-align:left; border-bottom:1px solid #333; color:#aaa; font-weight:600; }
+    tr:nth-child(even) { background:#0b0b0b; } tr { border-bottom:1px dashed #1b1b1b; }
+    .line { width:180px; font-weight:800; }
+    .lineCell { display:flex; align-items:center; gap:10px; }
+    .badge { display:inline-flex; align-items:center; justify-content:center; min-width:60px; height:40px; padding:0 16px; border-radius:999px; font-weight:900; font-size:22px; letter-spacing:0.3px; border:1px solid rgba(255,255,255,.25); }
+    .badge.small { min-width:36px; height:26px; font-size:14px; }
+    .dest { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:28px; font-weight:800; }
+    .meta { font-size:16px; color:#9ca3af; margin-top:4px; }
+    .min { text-align:right; font-variant-numeric: tabular-nums; width:150px; color:#ffd166; font-weight:900; font-size:28px; }
+    .err { color:#ff6b6b; }
+
+    /* live indicator - three bars */
+    .live { display:inline-flex; gap:2px; margin-left:6px; align-items:flex-end; vertical-align:middle; }
+    .live span { width:4px; height:10px; background:#6cf; display:block; opacity:0.9; animation: pulse 1s infinite ease-in-out; }
+    .live span:nth-child(2){ animation-delay: .15s; height:10px; }
+    .live span:nth-child(3){ animation-delay: .3s; height:7px; }
+    @keyframes pulse { 0%, 100% { transform: scaleY(0.6); } 50% { transform: scaleY(1); } }
+
+    .footer { position:fixed; bottom:10px; left:24px; right:24px; font-size:14px; color:#666; }
+    @media (orientation:landscape) { .wrap { padding:28px 32px; } }
+
+    .timeFilter { margin-bottom:14px; font-size:22px; display:flex; align-items:center; gap:12px; }
+    .timeInput { background:#111827; border:1px solid #4b5563; border-radius:8px; padding:6px 10px; font-size:22px; color:#f9fafb; width:90px; text-align:right; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="updated">Loading…</div>
+
+    <div class="timeFilter">From <input id="minOffsetInput" class="timeInput" type="number" min="0" max="60" step="1" value="0" /> min</div>
+
+    <div class="chips" id="modeChips"></div>
+    <div class="chips" id="stopChips"></div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Line</th>
+          <th>Destination</th>
+          <th style="text-align:right;">In</th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="3">Fetching live data…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="footer" id="footer"></div>
+
+  <script type="module">
+    // --- Config ---
+    const STOPS = [
+      { id: "900120006", label: "U Strausberger Platz" },
+      { id: "900120025", label: "U Weberwiese" },
+      { id: "900120005", label: "S Ostbahnhof" },
+      { id: "900120525", label: "Friedrichsberger Str" },
+      { id: "900120019", label: "Platz der Vereinten Nationen" },
+    ];
+
+    const API_BASE = 'https://v6.bvg.transport.rest';
+    const REFRESH_MS = 10000; // 10s
+    const WINDOW_MIN = 25; // show departures within N minutes
+    const MAX_ROWS = 24;
+    let minOffset = 0; // user-controlled lower bound in minutes
+
+    // Mode chips + colors
+    const MODE_LABELS = { u:'U', s:'S', tram:'Tram', bus:'Bus', regional:'RE' };
+    const MODE_KEYS = Object.keys(MODE_LABELS);
+    const MODE_COLORS = { u:'#1c73ff', s:'#2aa84a', tram:'#d9382f', bus:'#b65bd6', regional:'#ffb000' };
+    const modeFilter = new Set(MODE_KEYS);
+    const stopFilter = new Set(STOPS.map(s => s.label));
+
+    function normalizeMode(raw){
+      const r = (raw || '').toLowerCase();
+      if (r === 'subway' || r === 'u') return 'u';
+      if (r === 'suburban' || r === 's') return 's';
+      if (r.startsWith('tram')) return 'tram';
+      if (r.startsWith('bus')) return 'bus';
+      if (r.startsWith('regional') || r.includes('express')) return 'regional';
+      // Treat unknown as regional so it still shows under RE
+      return 'regional';
+    }
+
+    function minutesUntil(iso) {
+      if (!iso) return null;
+      const now = new Date();
+      const t = new Date(iso);
+      return Math.round((t - now) / 60000);
+    }
+
+    function isLive(d){
+      return d.realtime === true || (d.prognosisType && d.prognosisType.toLowerCase() !== 'planned');
+    }
+
+    function renderLive(){
+      return `<span class="live" title="Live"><span></span><span></span><span></span></span>`;
+    }
+
+    function lineBadge(dep){
+      // Prefer line-provided colors; fallback to mode color
+      const label = dep.line;
+      const bg = dep.colorBg || MODE_COLORS[dep.mode] || '#444';
+      const fg = dep.colorFg || (bg.toLowerCase()==='#ffffff' ? '#000' : '#fff');
+      return `<span class="badge" style="background:${bg};color:${fg}">${label}</span>`;
+    }
+
+    // --- Fetch helpers ---
+    async function fetchDeparturesForStop(stop) {
+      const url = `${API_BASE}/stops/${stop.id}/departures?duration=${WINDOW_MIN}&results=18&remarks=false&pretty=false`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${stop.label}: HTTP ${res.status}`);
+      const data = await res.json();
+      const list = (data.departures || []);
+      return list.map((d) => ({
+        stop: stop.label,
+        stopId: stop.id,
+        line: d?.line?.name ?? '?',
+        mode: normalizeMode(d?.line?.product ?? ''),
+        destination: d?.direction || d?.destination?.name || '',
+        when: d?.when || d?.plannedWhen,
+        prognosisType: d?.prognosisType || '',
+        realtime: d?.realtime === true,
+        colorBg: d?.line?.color?.bg || null,
+        colorFg: d?.line?.color?.fg || null
+      }));
+    }
+
+    // --- Business rules ---
+    // - Hide buses everywhere except Friedrichsberger Str (id 900120525)
+    // - Strausberger Platz: only U5 → Hbf
+    // - Weberwiese: only U5 → Hönow/Kaulsdorf-Nord
+    // - Ostbahnhof: show S-Bahn; allow non-S only if going to BER airport
+    const HBF_WORDS = ['hauptbahnhof','berlin hbf',' hbf'];
+    const EAST_END_WORDS = ['hönow','hoenow','kaulsdorf-nord','kaulsdorf'];
+
+    function includesAny(text, words){
+      const t = (text || '').toLowerCase();
+      return words.some(w => t.includes(w));
+    }
+
+    function passesBusinessRules(d){
+      // Global bus rule: only show buses at Friedrichsberger Str
+      if (d.mode === 'bus' && d.stopId !== '900120525') return false;
+
+      if (d.stop === 'U Strausberger Platz') {
+        // Only U5 towards Hauptbahnhof
+        if (d.mode !== 'u') return false;
+        if (d.line !== 'U5') return false;
+        return includesAny(d.destination, HBF_WORDS);
+      }
+
+      if (d.stop === 'U Weberwiese') {
+        // Only U5 eastbound (Hönow / Kaulsdorf-Nord)
+        if (d.mode !== 'u') return false;
+        if (d.line !== 'U5') return false;
+        return includesAny(d.destination, EAST_END_WORDS);
+      }
+
+      if (d.stop === 'S Ostbahnhof') {
+        if (d.mode === 's') return true; // any S-Bahn
+        // Allow non-S only if to BER Airport
+        const dest = (d.destination || '').toLowerCase();
+        const toBER = (dest.includes('flughafen') || dest.includes('airport')) && dest.includes('ber');
+        return toBER;
+      }
+
+      // Other stops: just obey bus rule
+      return true;
+    }
+
+    function passesUserFilters(d){
+      if (!modeFilter.has(d.mode)) return false;
+      if (!stopFilter.has(d.stop)) return false;
+      return true;
+    }
+
+    async function refresh() {
+      const tbody = document.getElementById('rows');
+      const updated = document.getElementById('updated');
+      tbody.innerHTML = `<tr><td colspan="3">Loading…</td></tr>`;
+      try {
+        const results = await Promise.allSettled(STOPS.map(fetchDeparturesForStop));
+        let deps = [];
+        for (const r of results) if (r.status === 'fulfilled') deps = deps.concat(r.value);
+
+        deps = deps
+          .map(d => ({ ...d, minutes: minutesUntil(d.when) }))
+          .filter(d => d.minutes !== null && d.minutes >= minOffset && d.minutes <= WINDOW_MIN)
+          .filter(passesBusinessRules)
+          .filter(passesUserFilters)
+          .sort((a, b) => a.minutes - b.minutes)
+          .slice(0, MAX_ROWS);
+
+        const rowsHtml = deps.length ? deps.map(d => `
+          <tr>
+            <td class="line"><div class="lineCell">${lineBadge(d)}</div></td>
+            <td class="dest">${d.destination}<div class="meta">${d.stop}</div></td>
+            <td class="min">${d.minutes} min ${isLive(d) ? renderLive() : ''}</td>
+          </tr>`).join('') : `<tr><td colspan="3">No matching departures in the next ${WINDOW_MIN} min.</td></tr>`;
+
+        tbody.innerHTML = rowsHtml;
+        updated.textContent = `Updated ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})}`;
+        document.getElementById('footer').textContent = `Data: transport.rest (BVG/VBB realtime)`;
+      } catch (err) {
+        console.error(err);
+        tbody.innerHTML = `<tr><td colspan="3" class="err">Error loading data: ${String(err && err.message || err)}</td></tr>`;
+        updated.textContent = '';
+      }
+    }
+
+    // Chips UI
+    function renderChips() {
+      const modeWrap = document.getElementById('modeChips');
+      const stopWrap = document.getElementById('stopChips');
+
+      // Modes row: All + individual modes
+      const modeChipsHtml = [
+        `<div class="chip active" data-type="mode-all" data-key="all">All</div>`,
+        ...MODE_KEYS.map(k => {
+          const bg = MODE_COLORS[k] || '#222';
+          const fg = (bg && bg.toLowerCase()==='#ffb000') ? '#000' : '#fff';
+          const stateClass = modeFilter.has(k) ? 'active' : 'inactive';
+          const emoji = k==='u'?'🚇':k==='s'?'Ⓢ':k==='tram'?'🚋':k==='bus'?'🚌':k==='regional'?'🚆':'◻︎';
+          return `<div class="chip ${stateClass}" style="background:${bg};color:${fg}" data-type="mode" data-key="${k}">${emoji}&nbsp;${MODE_LABELS[k]}</div>`;
+        })
+      ].join('');
+
+      modeWrap.innerHTML = modeChipsHtml;
+
+      // Stops row
+      stopWrap.innerHTML = STOPS.map(s => {
+        const stateClass = stopFilter.has(s.label) ? 'active' : 'inactive';
+        return `<div class="chip ${stateClass}" style="background:#1a1a1a;color:#ddd" data-type="stop" data-key="${s.label}">📍&nbsp;${s.label}</div>`;
+      }).join('');
+
+      const onTap = (e) => {
+        const el = e.target.closest('.chip');
+        if (!el) return;
+        const type = el.getAttribute('data-type');
+        const key = el.getAttribute('data-key');
+
+        if (type === 'mode-all') {
+          // Toggle all modes on/off
+          const allOn = MODE_KEYS.every(k => modeFilter.has(k));
+          modeFilter.clear();
+          if (!allOn) {
+            MODE_KEYS.forEach(k => modeFilter.add(k));
+          }
+          // Update classes for mode chips (leave All as active)
+          document.querySelectorAll('#modeChips .chip').forEach(chip => {
+            const t = chip.getAttribute('data-type');
+            const k2 = chip.getAttribute('data-key');
+            if (t === 'mode-all') {
+              chip.classList.add('active');
+            } else {
+              if (modeFilter.has(k2)) {
+                chip.classList.add('active');
+                chip.classList.remove('inactive');
+              } else {
+                chip.classList.remove('active');
+                chip.classList.add('inactive');
+              }
+            }
+          });
+          refresh();
+          return;
+        }
+
+        if (type === 'mode') {
+          if (modeFilter.has(key)) {
+            modeFilter.delete(key);
+            el.classList.remove('active');
+            el.classList.add('inactive');
+          } else {
+            modeFilter.add(key);
+            el.classList.add('active');
+            el.classList.remove('inactive');
+          }
+        } else if (type === 'stop') {
+          if (stopFilter.has(key)) {
+            stopFilter.delete(key);
+            el.classList.remove('active');
+            el.classList.add('inactive');
+          } else {
+            stopFilter.add(key);
+            el.classList.add('active');
+            el.classList.remove('inactive');
+          }
+        }
+
+        refresh();
+      };
+
+      modeWrap.addEventListener('click', onTap);
+      stopWrap.addEventListener('click', onTap);
+    }
+
+    renderChips();
+
+    // Time filter input hook
+    const minInput = document.getElementById('minOffsetInput');
+    if (minInput) {
+      minInput.addEventListener('change', () => {
+        const v = parseInt(minInput.value, 10);
+        minOffset = Number.isFinite(v) && v >= 0 ? v : 0;
+        minInput.value = String(minOffset);
+        refresh();
+      });
+    }
+
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+
+    // --- Tiny self-tests (visible in console) ---
+    (function runTests(){
+      console.info('[tests] starting');
+      console.assert(normalizeMode('subway')==='u', 'normalizeMode subway→u');
+      console.assert(normalizeMode('suburban')==='s', 'normalizeMode suburban→s');
+      console.assert(normalizeMode('tramway').startsWith('tram'), 'normalizeMode tram*');
+      const in2 = minutesUntil(new Date(Date.now()+2*60000).toISOString());
+      console.assert(typeof in2==='number' && in2>=1 && in2<=3, 'minutesUntil ~2min');
+      console.info('[tests] ok');
+    })();
+  </script>
+</body>
+</html>
