@@ -9,11 +9,11 @@
     .wrap { padding:24px; max-width:1200px; margin:0 auto; }
     #updated { font-size:18px; color:#aaa; margin-bottom:14px; }
 
-    .chips { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
-    .chip { cursor:pointer; user-select:none; padding:10px 18px; border-radius:24px; color:#fff; font-size:20px; font-weight:800; border:1px solid rgba(255,255,255,.25); transition:all .15s ease; box-shadow: inset 0 0 0 0 rgba(255,255,255,0); }
-    .chip.active { outline:3px solid rgba(255,255,255,.5); box-shadow: 0 0 0 3px rgba(255,255,255,.15); transform: translateY(-1px); }
-    .chip.inactive { opacity:.3; filter: grayscale(35%); }
-    .chip.inactive::after { content:''; display:inline-block; width:0; height:0; border-top:12px solid transparent; border-bottom:12px solid transparent; border-left:12px solid rgba(255,255,255,.6); margin-left:8px; transform: skewX(-20deg); }
+    .chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+    .chip { cursor:pointer; user-select:none; padding:8px 14px; border-radius:999px; color:#fff; font-size:18px; font-weight:700; border:none; transition:opacity .15s ease, transform .1s ease, box-shadow .15s ease; box-shadow:none; }
+    .chip.active { box-shadow:0 0 0 2px rgba(255,255,255,.3); transform:translateY(-1px); }
+    .chip.inactive { opacity:.35; filter:none; }
+    .chip.inactive::after { content:''; }
 
     table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:26px; }
     th, td { padding:14px 10px; }
@@ -196,6 +196,7 @@
     async function refresh() {
       const tbody = document.getElementById('rows');
       const updated = document.getElementById('updated');
+      const prevScroll = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
       tbody.innerHTML = `<tr><td colspan="3">Loading…</td></tr>`;
       try {
         const results = await Promise.allSettled(STOPS.map(fetchDeparturesForStop));
@@ -218,6 +219,8 @@
           </tr>`).join('') : `<tr><td colspan="3">No matching departures in the next ${WINDOW_MIN} min.</td></tr>`;
 
         tbody.innerHTML = rowsHtml;
+        // restore scroll so auto-refresh doesn't jump to top on iPad
+        window.scrollTo(0, prevScroll);
         updated.textContent = `Updated ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})}`;
         document.getElementById('footer').textContent = `Data: transport.rest (BVG/VBB realtime)`;
       } catch (err) {
